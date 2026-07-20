@@ -25,7 +25,7 @@ class Result extends RefCounted:
 		value = val
 		error = err
 	
-	func is_ok():
+	func is_ok() -> bool:
 		return error == null || error == Error.OK
 
 	static func success(val: Variant) -> Result:
@@ -55,3 +55,8 @@ class TocEntry extends RefCounted:
 	var payload_uncompressed_size: int
 	
 	var payload_checksum: PackedByteArray
+
+class FileData extends RefCounted:
+	var header: Header
+	var toc: Dictionary[StringName, TocEntry]
+	var payloads: Array[PackedByteArray]
