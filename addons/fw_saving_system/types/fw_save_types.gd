@@ -3,7 +3,20 @@ class_name FWSaveTypes
 extends RefCounted
 
 enum Error {
-	OK = 2000
+	OK = 2000,
+	
+	IO_ERROR = 3000,
+	CORRUPTED_FILE = 3001,
+	
+	DATA_ERROR = 4000,
+	FILE_SIZE_TOO_SMALL = 4001,
+	INVALID_FILE_TYPE = 4002,
+	UNKNOWN_HEADER_VERSION = 4003,
+	
+	CHECKSUM_ERROR = 5000,
+	INVALID_TOC_CHECKSUM = 5001,
+	INVALID_HEADER_CHECKSUM = 5002,
+	INVALID_PAYLOAD_CHECKSUM = 5003,
 }
 
 enum Encoding {
@@ -15,6 +28,12 @@ enum Encoding {
 
 enum HeaderFlags {
 	NONE = 0
+}
+
+enum TocEntryFlags {
+	NONE = 0,
+	
+	PRIORITY = 1 << 0
 }
 
 class Result extends RefCounted:
@@ -29,14 +48,15 @@ class Result extends RefCounted:
 		return error == null || error == Error.OK
 
 	static func success(val: Variant) -> Result:
-		return Result.new(val, null)
+		return Result.new(val, FWSaveTypes.Error.OK)
 
-	static func failure(err: Error) -> Result:
+	static func failure(err: FWSaveTypes.Error) -> Result:
 		return Result.new(null, err)
 
 class Header extends RefCounted:
 	var magic_number: StringName
 	var version: int
+	var file_size: int
 	var toc_count: int
 	var flags: HeaderFlags
 
@@ -48,15 +68,15 @@ class Header extends RefCounted:
 	var header_checksum: PackedByteArray
 
 class TocEntry extends RefCounted:
-	var key: StringName
-
 	var payload_offset: int
 	var payload_disk_size: int
 	var payload_uncompressed_size: int
+	var encoding: Encoding
+	var flags: TocEntryFlags
 	
 	var payload_checksum: PackedByteArray
 
 class FileData extends RefCounted:
-	var header: Header
-	var toc: Dictionary[StringName, TocEntry]
-	var payloads: Array[PackedByteArray]
+	var header: Header = Header.new()
+	var toc: Dictionary[StringName, TocEntry] = {}
+	var payloads: Array[PackedByteArray] = []
