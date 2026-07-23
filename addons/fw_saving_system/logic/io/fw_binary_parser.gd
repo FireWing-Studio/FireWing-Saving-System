@@ -8,22 +8,14 @@ const GAME_LITERAL_SIZE = 32
 const GAME_VERSION_SIZE = 32
 const GODOT_VERSION_SIZE = 32
 
-var game_literal: PackedByteArray
-var game_version: PackedByteArray
-var godot_version: PackedByteArray
+var game_literal: StringName
+var game_version: StringName
+var godot_version: StringName
 
-func _init(game_lit: StringName, game_vers: StringName, godot_vers: StringName):
-	game_literal = _adapt_string_to_buf(game_lit, GAME_LITERAL_SIZE)
-	game_version = _adapt_string_to_buf(game_vers, GAME_VERSION_SIZE)
-	godot_version = _adapt_string_to_buf(godot_vers, GODOT_VERSION_SIZE)
-
-func _adapt_string_to_buf(str: StringName, size: int) -> PackedByteArray:
-	var buf: PackedByteArray = str.to_ascii_buffer()
-	if buf.size() >= size:
-		buf = buf.slice(0, size-1)
-	buf.resize(size)
-
-	return buf
+func _init(game_literal: StringName, game_version: StringName, godot_version: StringName):
+	self.game_literal = game_literal.left(GAME_LITERAL_SIZE)
+	self.game_version = game_version.left(GAME_VERSION_SIZE)
+	self.godot_version = godot_version.left(GODOT_VERSION_SIZE)
 
 func decode(bytes: PackedByteArray) -> FWSaveTypes.Result:
 	var file_data := FWSaveTypes.FileData.new()
@@ -47,28 +39,35 @@ func decode(bytes: PackedByteArray) -> FWSaveTypes.Result:
 			return FWSaveTypes.Result.failure(FWSaveTypes.Error.UNKNOWN_HEADER_VERSION)
 
 func _decode_v1(stream: StreamPeerBuffer, file_data: FWSaveTypes.FileData) -> FWSaveTypes.Result:
+	var res: FWSaveTypes.Result = _decode_v1_header(stream, file_data)
+	if !res.is_ok():
+		return res
+		
+	res = _decode_v1_toc(stream, file_data)
+	if !res.is_ok():
+		return res
+	
+	return FWSaveTypes.Result.success(file_data)
+
+func _decode_v1_header(stream: StreamPeerBuffer, file_data: FWSaveTypes.FileData) -> FWSaveTypes.Result:
 	if stream.get_size() < 256:
 		return FWSaveTypes.Result.failure(FWSaveTypes.Error.FILE_SIZE_TOO_SMALL)
+		
+	stream.seek(8)
+	file_data.header.file_size = stream.get_u32()
+	file_data.header.toc_count = stream.get_u16()
+	file_data.header.flags = stream.get_u16()
 	
-	var file_size = stream.get_u32()
-	file_data.header.file_size = file_size
-	
-	var toc_count = stream.get_u16()
-	file_data.header.toc_count = toc_count
-	
-	var flags = stream.get_u16()
-	file_data.header.flags = flags
-	
-	var game_literal = stream.get_string(32)
-	file_data.header.game_literal = game_literal
+	file_data.header.game_literal = stream.get_string(32)
+	if game_literal != self.game_literal:
+		return FWSaveTypes.Result.failure(FWSaveTypes.Error.DIFFERENT_GAME_LITERAL)
 	stream.seek(48)
 	
-	var game_version = stream.get_string(32)
-	file_data.header.game_version = game_version
+	file_data.header.game_version = stream.get_string(32)
 	stream.seek(80)
 	
-	var godot_version = stream.get_string(32)
-	file_data.header.godot_version = godot_version
+	# Godot Version is currently skipped
+	file_data.header.godot_version = stream.get_string(32)
 	stream.seek(112)
 	
 	stream.seek(192)
@@ -76,13 +75,36 @@ func _decode_v1(stream: StreamPeerBuffer, file_data: FWSaveTypes.FileData) -> FW
 	var toc_checksum_res = stream.get_data(32)
 	if toc_checksum_res[0] != OK:
 		return FWSaveTypes.Result.failure(FWSaveTypes.Error.CORRUPTED_FILE)
-	var toc_checksum = toc_checksum_res[1]
-	file_data.header.toc_checksum = toc_checksum
+	file_data.header.toc_checksum = toc_checksum_res[1]
 	
 	var header_checksum_res = stream.get_data(32)
 	if header_checksum_res[0] != OK:
 		return FWSaveTypes.Result.failure(FWSaveTypes.Error.CORRUPTED_FILE)
-	var header_checksum = header_checksum_res[1]
-	file_data.header.header_checksum = header_checksum
+	file_data.header.header_checksum = header_checksum_res[1]
+	
+	return FWSaveTypes.Result.success(file_data)
+
+func _decode_v1_toc(stream: StreamPeerBuffer, file_data: FWSaveTypes.FileData) -> FWSaveTypes.Result:
+	if stream.get_size() < 256 + 80 * file_data.header.toc_count:
+		return FWSaveTypes.Result.failure(FWSaveTypes.Error.TOC_ENTRIES_NOT_PRESENT)
+	
+	stream.seek(256)
+	for i in range(file_data.header.toc_count):
+		var toc_entry: FWSaveTypes.TocEntry = FWSaveTypes.TocEntry.new()
+		
+		toc_entry.key = stream.get_string(32)
+		stream.seek(256 + 80 * i + 32)
+		
+		toc_entry.payload_offset = stream.get_u32()
+		toc_entry.payload_disk_size = stream.get_u32()
+		toc_entry.payload_uncompressed_size = stream.get_u32()
+		toc_entry.encoding = stream.get_u16()
+		
+		var payload_checksum_res = stream.get_data(32)
+		if payload_checksum_res[0] != OK:
+			return FWSaveTypes.Result.failure(FWSaveTypes.Error.CORRUPTED_FILE)
+		file_data.header.payload_checksum = payload_checksum_res[1]
+		
+		file_data.toc[toc_entry.key] = toc_entry
 	
 	return FWSaveTypes.Result.success(file_data)
