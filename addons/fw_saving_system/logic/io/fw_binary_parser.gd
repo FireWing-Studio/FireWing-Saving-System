@@ -51,8 +51,20 @@ func _decode_v1(stream: StreamPeerBuffer, file_data: FWSaveTypes.FileData) -> FW
 
 func _decode_v1_header(stream: StreamPeerBuffer, file_data: FWSaveTypes.FileData) -> FWSaveTypes.Result:
 	if stream.get_size() < 256:
-		return FWSaveTypes.Result.failure(FWSaveTypes.Error.FILE_SIZE_TOO_SMALL)
-		
+		return FWSaveTypes.Result.failure(FWSaveTypes.Error.HEADER_NOT_PRESENT)
+	
+	stream.seek(224)
+	var header_checksum_res = stream.get_data(32)
+	if header_checksum_res[0] != OK:
+		return FWSaveTypes.Result.failure(FWSaveTypes.Error.CORRUPTED_FILE)
+	file_data.header.header_checksum = header_checksum_res[1]
+	
+	var ctx := HashingContext.new()
+	ctx.start(HashingContext.HASH_SHA256)
+	ctx.update(stream.data_array.slice(0, 224))
+	if ctx.finish() != file_data.header.header_checksum:
+		return FWSaveTypes.Result.failure(FWSaveTypes.Error.INVALID_HEADER_CHECKSUM)
+	
 	stream.seek(8)
 	file_data.header.file_size = stream.get_u32()
 	file_data.header.toc_count = stream.get_u16()
@@ -77,16 +89,18 @@ func _decode_v1_header(stream: StreamPeerBuffer, file_data: FWSaveTypes.FileData
 		return FWSaveTypes.Result.failure(FWSaveTypes.Error.CORRUPTED_FILE)
 	file_data.header.toc_checksum = toc_checksum_res[1]
 	
-	var header_checksum_res = stream.get_data(32)
-	if header_checksum_res[0] != OK:
-		return FWSaveTypes.Result.failure(FWSaveTypes.Error.CORRUPTED_FILE)
-	file_data.header.header_checksum = header_checksum_res[1]
-	
 	return FWSaveTypes.Result.success(file_data)
 
 func _decode_v1_toc(stream: StreamPeerBuffer, file_data: FWSaveTypes.FileData) -> FWSaveTypes.Result:
-	if stream.get_size() < 256 + 80 * file_data.header.toc_count:
+	var toc_end := 256 + 80 * file_data.header.toc_count
+	if stream.get_size() < toc_end:
 		return FWSaveTypes.Result.failure(FWSaveTypes.Error.TOC_ENTRIES_NOT_PRESENT)
+	
+	var ctx := HashingContext.new()
+	ctx.start(HashingContext.HASH_SHA256)
+	ctx.update(stream.data_array.slice(256, toc_end))
+	if ctx.finish() != file_data.header.toc_checksum:
+		return FWSaveTypes.Result.failure(FWSaveTypes.Error.INVALID_TOC_CHECKSUM)
 	
 	stream.seek(256)
 	for i in range(file_data.header.toc_count):
